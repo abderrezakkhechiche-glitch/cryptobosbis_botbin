@@ -1,0 +1,30 @@
+name: Check Crypto Signals
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+jobs:
+  check-signals:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    
+    - name: Run bot
+      env:
+        TELEGRAM_BOT_TOKEN: ${{ 8672651988:AAHxX0SV8KOmFsNa9g_0IJBR_mXqtGqV_Uk
+}}
+        TELEGRAM_CHAT_ID: ${{ 6389894444 }}
+      run: python bot.py
+
+
