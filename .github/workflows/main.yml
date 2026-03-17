@@ -1,12 +1,12 @@
-name: ALTCOINS Signals
+name: Ultra Fast Signals
 
 on:
   schedule:
-    - cron: '*/45 * * * *'  # كل 45 دقيقة (مناسب للفريم 4 ساعات)
+    - cron: '*/15 * * * *'  # كل 15 دقيقة
   workflow_dispatch:
 
 jobs:
-  scan-altcoins:
+  fast-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
