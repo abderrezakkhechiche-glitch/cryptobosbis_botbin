@@ -1,12 +1,12 @@
-name: MYH Binance Signals
+name: ALTCOINS Signals
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # كل 30 دقيقة
+    - cron: '*/45 * * * *'  # كل 45 دقيقة (مناسب للفريم 4 ساعات)
   workflow_dispatch:
 
 jobs:
-  run-bot:
+  scan-altcoins:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
