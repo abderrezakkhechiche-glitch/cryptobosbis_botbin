@@ -12,41 +12,47 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 bot = Bot(token=BOT_TOKEN)
 
-# ------------------- ملفات البيانات -------------------
-SIGNALS_FILE = "signals_sent.csv"  # الإشارات التي أرسلها البوت
-TRADES_FILE = "active_trades.csv"  # الصفقات التي دخلتها أنت لمتابعتها
-
-# ------------------- جلب جميع أزواج USDT -------------------
-def get_all_usdt_pairs():
+# ------------------- جلب جميع العملات البديلة -------------------
+def get_all_altcoins():
     url = "https://api.binance.com/api/v3/exchangeInfo"
     response = requests.get(url)
     if response.status_code == 200:
         data = response.json()
         symbols = data['symbols']
-        # استبعاد العملات المستقرة (USDT, BUSD, USDC, DAI, TUSD, UST, etc.)
-        exclude = ['USDT', 'BUSD', 'USDC', 'DAI', 'TUSD', 'UST', 'FDUSD']
-        usdt_pairs = [
-            s['symbol'] for s in symbols 
-            if s['symbol'].endswith('USDT') 
-            and s['status'] == 'TRADING'
-            and not any(x in s['symbol'] for x in exclude)
-        ]
-        return usdt_pairs
+        
+        # استبعاد العملات الرئيسية (BTC, ETH) والعملات المستقرة
+        exclude = ['BTC', 'ETH', 'USDT', 'BUSD', 'USDC', 'DAI', 'TUSD', 'FDUSD', 'PAX', 'UST']
+        
+        altcoins = []
+        for s in symbols:
+            symbol = s['symbol']
+            # نأخذ فقط الأزواج مع USDT
+            if symbol.endswith('USDT') and s['status'] == 'TRADING':
+                # استخراج اسم العملة الأساسية (مثلاً: BTC من BTCUSDT)
+                base_asset = symbol.replace('USDT', '')
+                
+                # إذا كانت العملة الأساسية ليست من المستثنيات
+                if base_asset not in exclude:
+                    altcoins.append(symbol)
+        
+        return altcoins
     return []
 
-# ------------------- جلب بيانات الشموع -------------------
-def get_klines(symbol, interval='1h', limit=50):
+# ------------------- جلب بيانات الشموع (فريم 4 ساعات) -------------------
+def get_klines(symbol, interval='4h', limit=30):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             data = response.json()
             closes = [float(x[4]) for x in data]
+            highs = [float(x[2]) for x in data]
+            lows = [float(x[3]) for x in data]
             volumes = [float(x[5]) for x in data]
-            return closes, volumes
+            return closes, highs, lows, volumes
     except:
-        return None, None
-    return None, None
+        return None, None, None, None
+    return None, None, None, None
 
 # ------------------- حساب RSI -------------------
 def calculate_rsi(closes, period=14):
@@ -71,115 +77,110 @@ def calculate_macd(closes):
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     
     # تقاطع إيجابي (MACD فوق Signal)
-    if macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-2] <= signal_line.iloc[-2]:
+    if macd_line.iloc[-1] > signal_line.iloc[-1]:
         return True
     return False
 
-# ------------------- حساب المتوسط المتحرك -------------------
+# ------------------- حساب المتوسطات المتحركة -------------------
 def calculate_ema(closes, period):
     return pd.Series(closes).ewm(span=period, adjust=False).mean().iloc[-1]
 
-# ------------------- حساب متوسط الحجم -------------------
-def calculate_avg_volume(volumes, period=20):
-    if len(volumes) < period:
-        return 0
-    return np.mean(volumes[-period:])
-
-# ------------------- التحليل الفني -------------------
-def analyze_symbol(symbol):
-    closes, volumes = get_klines(symbol)
-    if not closes or len(closes) < 30 or not volumes:
+# ------------------- التحليل السريع للـ ALTCOINS -------------------
+def analyze_altcoin(symbol):
+    closes, highs, lows, volumes = get_klines(symbol)
+    if not closes or len(closes) < 20:
         return None
+    
+    current_price = closes[-1]
+    prev_price = closes[-2]
     
     # المؤشرات
     rsi = calculate_rsi(closes)
     macd_buy = calculate_macd(closes)
     ema9 = calculate_ema(closes, 9)
-    current_price = closes[-1]
-    avg_volume = calculate_avg_volume(volumes)
-    current_volume = volumes[-1]
+    ema21 = calculate_ema(closes, 21)
     
-    # شروط الدخول
-    buy_signal = (
-        rsi < 35 and                # ذروة بيع
-        macd_buy and                 # تقاطع MACD إيجابي
-        current_price > ema9 and     # فوق المتوسط القصير
-        current_volume > avg_volume  # حجم تداول أعلى من المتوسط
-    )
+    # شروط الدخول السريع (مناسبة للـ ALTCOINS)
+    buy_signals = []
     
-    if buy_signal:
-        # هدف عشوائي بين 4% و 5%
-        target_percent = np.random.uniform(4.0, 5.0)
-        target_price = round(current_price * (1 + target_percent/100), 4)
+    # شرط 1: RSI أقل من 40 (منطقة ذروة بيع)
+    if rsi < 40:
+        buy_signals.append("RSI Oversold")
+    
+    # شرط 2: MACD إيجابي
+    if macd_buy:
+        buy_signals.append("MACD Bullish")
+    
+    # شرط 3: السعر فوق EMA9 (اتجاه صاعد قصير)
+    if current_price > ema9:
+        buy_signals.append("Price > EMA9")
+    
+    # شرط 4: EMA9 فوق EMA21 (اتجاه صاعد عام)
+    if ema9 > ema21:
+        buy_signals.append("EMA9 > EMA21")
+    
+    # شرط 5: ارتفاع عن الشمعة السابقة
+    if current_price > prev_price * 1.01:  # ارتفاع 1% على الأقل
+        buy_signals.append("Momentum +1%")
+    
+    # إذا تحقق شرطان على الأقل، نرسل إشارة
+    if len(buy_signals) >= 2:
+        # اختيار هدف عشوائي بين 2% و 5%
+        target_percent = np.random.uniform(2.0, 5.0)
+        target_price = round(current_price * (1 + target_percent/100), 8)
         
         return {
             'symbol': symbol.replace('USDT', '/USDT'),
-            'buy_at': round(current_price, 4),
+            'entry': round(current_price, 8),
             'target': target_price,
-            'term': '0 - 10 Days',
-            'exchange': 'Binance',
-            'entry_price': current_price,
-            'target_percent': round(target_percent, 2)
+            'target_percent': round(target_percent, 2),
+            'rsi': round(rsi, 2),
+            'signals': buy_signals,
+            'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         }
     return None
 
-# ------------------- حفظ الإشارة المرسلة -------------------
-def save_signal(signal):
-    file_exists = os.path.isfile(SIGNALS_FILE)
-    with open(SIGNALS_FILE, 'a', newline='') as file:
-        writer = csv.writer(file)
-        if not file_exists:
-            writer.writerow(['symbol', 'buy_at', 'target', 'term', 'exchange', 'sent_time'])
-        writer.writerow([
-            signal['symbol'],
-            signal['buy_at'],
-            signal['target'],
-            signal['term'],
-            signal['exchange'],
-            datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-        ])
-
-# ------------------- إرسال الإشارة -------------------
-async def send_signal(signal):
+# ------------------- إرسال إشارة ALTCOIN -------------------
+async def send_altcoin_signal(signal):
     message = f"""
-**MYH Bot**
-Symbol: {signal['symbol']}
-Buy at: {signal['buy_at']} or less
-Target: {signal['target']}
-Term: {signal['term']}
-Exchange: {signal['exchange']}
+🚀 **ALTCOIN SIGNAL** 🚀
+
+💰 {signal['symbol']}
+📥 Entry: {signal['entry']}
+🎯 Target: {signal['target']} ({signal['target_percent']}%)
+📊 RSI: {signal['rsi']}
+📈 Indicators: {', '.join(signal['signals'])}
+⏰ Time: {signal['time']}
+
+⚠️ Trade within 4 hours frame
 """
     await bot.send_message(chat_id=CHAT_ID, text=message, parse_mode='Markdown')
     print(f"✅ Signal sent: {signal['symbol']}")
-    
-    # حفظ الإشارة
-    save_signal(signal)
-    
-    # إضافة الصفقة للمتابعة (افتراضيًا بانتظار دخولك)
-    add_to_pending(signal)
 
-# ------------------- إضافة صفقة للمتابعة -------------------
-def add_to_pending(signal):
-    file_exists = os.path.isfile(TRADES_FILE)
-    with open(TRADES_FILE, 'a', newline='') as file:
+# ------------------- حفظ الإشارة لمتابعتها -------------------
+def save_signal(signal):
+    file_exists = os.path.isfile('alt_signals.csv')
+    with open('alt_signals.csv', 'a', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         if not file_exists:
-            writer.writerow(['symbol', 'entry_price', 'target', 'status', 'entry_time', 'sent_time'])
+            writer.writerow(['symbol', 'entry', 'target', 'target_percent', 'rsi', 'signals', 'time', 'status'])
         writer.writerow([
             signal['symbol'],
-            signal['buy_at'],
+            signal['entry'],
             signal['target'],
-            'pending',  # بانتظار أن يدخلها المستخدم
-            '',
-            datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            signal['target_percent'],
+            signal['rsi'],
+            '; '.join(signal['signals']),
+            signal['time'],
+            'pending'
         ])
 
 # ------------------- مراقبة الصفقات النشطة -------------------
 async def monitor_active_trades():
-    if not os.path.isfile(TRADES_FILE):
+    if not os.path.isfile('alt_signals.csv'):
         return
     
-    with open(TRADES_FILE, 'r') as file:
+    with open('alt_signals.csv', 'r', encoding='utf-8') as file:
         reader = csv.DictReader(file)
         trades = list(reader)
     
@@ -188,7 +189,6 @@ async def monitor_active_trades():
     
     for trade in trades:
         if trade['status'] == 'active':
-            # جلب السعر الحالي
             symbol_clean = trade['symbol'].replace('/', '')
             url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol_clean}"
             response = requests.get(url)
@@ -198,19 +198,19 @@ async def monitor_active_trades():
                 target = float(trade['target'])
                 
                 if current >= target:
-                    # هدف محقق
-                    entry = float(trade['entry_price'])
+                    entry = float(trade['entry'])
                     profit = ((current - entry) / entry) * 100
                     
                     message = f"""
-✅ **هدف محقق** ✅
+✅ **ALTCOIN TARGET HIT** ✅
 
-العملة: {trade['symbol']}
-سعر الدخول: {entry}
-السعر الحالي: {current}
-نسبة الربح: {profit:.2f}%
-الهدف: {target}
-🎯 تم تحقيق الهدف بنجاح!
+💰 {trade['symbol']}
+📥 Entry: {entry}
+🎯 Target: {target}
+📈 Profit: {profit:.2f}%
+⏰ Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}
+
+🎉 Congratulations!
 """
                     await bot.send_message(chat_id=CHAT_ID, text=message)
                     trade['status'] = 'closed'
@@ -219,32 +219,33 @@ async def monitor_active_trades():
         updated_trades.append(trade)
     
     if changed:
-        with open(TRADES_FILE, 'w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=['symbol', 'entry_price', 'target', 'status', 'entry_time', 'sent_time'])
+        with open('alt_signals.csv', 'w', newline='', encoding='utf-8') as file:
+            writer = csv.DictWriter(file, fieldnames=['symbol', 'entry', 'target', 'target_percent', 'rsi', 'signals', 'time', 'status'])
             writer.writeheader()
             writer.writerows(updated_trades)
 
 # ------------------- الوظيفة الرئيسية -------------------
 async def main():
-    print(f"🔍 بدء التحليل في {datetime.utcnow()}")
+    print(f"🔍 Scanning ALTCOINS at {datetime.utcnow()}")
     
-    # 1. جلب جميع أزواج USDT
-    all_pairs = get_all_usdt_pairs()
-    print(f"✅ تم العثور على {len(all_pairs)} زوج")
+    # 1. جلب جميع العملات البديلة
+    all_alts = get_all_altcoins()
+    print(f"✅ Found {len(all_alts)} altcoins")
     
-    # 2. تحليل كل زوج
-    signals_found = 0
-    for pair in all_pairs:
-        signal = analyze_symbol(pair)
+    # 2. تحليل كل عملة بديلة
+    signals_sent = 0
+    for alt in all_alts[:50]:  # نكتفي بأول 50 عملة للسرعة
+        signal = analyze_altcoin(alt)
         if signal:
-            await send_signal(signal)
-            signals_found += 1
+            await send_altcoin_signal(signal)
+            save_signal(signal)
+            signals_sent += 1
             await asyncio.sleep(2)  # مهلة بين الإشارات
     
     # 3. مراقبة الصفقات النشطة
     await monitor_active_trades()
     
-    print(f"✅ انتهى. تم إرسال {signals_found} إشارة جديدة")
+    print(f"✅ Done. Sent {signals_sent} signals")
 
 if __name__ == "__main__":
     asyncio.run(main())
