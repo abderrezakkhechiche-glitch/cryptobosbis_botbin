@@ -1,12 +1,12 @@
-name: Ultra Fast Signals
+name: Smart Strategy Signals
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # كل 15 دقيقة
+    - cron: '0 */4 * * *'  # كل 4 ساعات
   workflow_dispatch:
 
 jobs:
-  fast-scan:
+  smart-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
