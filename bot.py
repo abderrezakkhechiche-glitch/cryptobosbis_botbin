@@ -352,20 +352,21 @@ async def monitor_trades():
             writer.writerows(trades)
 
 # ------------------- الرئيسية -------------------
-async def main():
-    print(f"🧠 Smart Tracker running at {datetime.utcnow()}")
-    
-    # 1. البحث عن إشارات جديدة
-    coins = get_altcoins()
-    print(f"✅ {len(coins)} coins loaded")
-    
-    for coin in coins:
-        signal = smart_analysis(coin)
-        if signal:
-            await send_signal(signal)
-            save_signal(signal)
-            add_to_tracking(signal)
-            await asyncio.sleep(3)
+# ===== اختبار يدوي مؤقت =====
+test_signal = {
+    'symbol': 'BTCUSDT',
+    'display_symbol': 'BTC/USDT',
+    'entry': 65000,
+    'target1': 66950,
+    'target2': 68900,
+    'stop': 63050,
+    'score': 8,
+    'reasons': ['اختبار', 'يدوي'],
+    'time': datetime.utcnow()
+}
+await send_signal(test_signal)
+print("✅ تم إرسال إشارة اختبارية")
+# ============================
     
     # 2. مراقبة الصفقات النشطة
     await monitor_trades()
