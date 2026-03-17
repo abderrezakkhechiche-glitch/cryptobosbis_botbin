@@ -1,12 +1,12 @@
-name: Smart Strategy Signals
+name: Smart Tracker Signals
 
 on:
   schedule:
-    - cron: '0 */4 * * *'  # كل 4 ساعات
+    - cron: '0 * * * *'  # كل ساعة
   workflow_dispatch:
 
 jobs:
-  smart-scan:
+  smart-track:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
