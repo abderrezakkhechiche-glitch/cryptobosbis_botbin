@@ -2,7 +2,7 @@ import os
 import asyncio
 import requests
 import csv
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram import Bot
 import numpy as np
 import pandas as pd
@@ -11,6 +11,9 @@ import pandas as pd
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 bot = Bot(token=BOT_TOKEN)
+
+SIGNALS_FILE = "signals.csv"
+TRADES_FILE = "active_trades.csv"
 
 # ------------------- جلب العملات البديلة -------------------
 def get_altcoins():
@@ -76,7 +79,6 @@ def calculate_adx(highs, lows, closes, period=14):
     if len(tr_list) < period:
         return 0
     
-    # Wilder's smoothing
     atr = np.mean(tr_list[-period:])
     plus_di = 100 * np.mean(plus_dm_list[-period:]) / atr if atr > 0 else 0
     minus_di = 100 * np.mean(minus_dm_list[-period:]) / atr if atr > 0 else 0
@@ -115,8 +117,6 @@ def calculate_macd_crossover(closes):
     exp2 = pd.Series(closes).ewm(span=26).mean()
     macd_line = exp1 - exp2
     signal_line = macd_line.ewm(span=9).mean()
-    
-    # التقاطع الإيجابي
     return macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-2] <= signal_line.iloc[-2]
 
 # ------------------- EMA -------------------
@@ -183,23 +183,60 @@ def smart_analysis(symbol):
         stop = round(price * 0.97, 6)
         
         return {
-            'symbol': symbol.replace('USDT', '/USDT'),
-            'entry': round(price, 6),
+            'symbol': symbol,
+            'display_symbol': symbol.replace('USDT', '/USDT'),
+            'entry': price,
             'target1': target1,
             'target2': target2,
             'stop': stop,
             'score': score,
             'reasons': reasons,
-            'time': datetime.utcnow().strftime('%Y-%m-%d %H:%M')
+            'time': datetime.utcnow()
         }
     return None
 
-# ------------------- إرسال الإشارة -------------------
-async def send_smart_signal(s):
-    msg = f"""
-🧠 **إشارة ذكية جداً** 🧠
+# ------------------- حفظ الإشارة -------------------
+def save_signal(signal):
+    file_exists = os.path.isfile(SIGNALS_FILE)
+    with open(SIGNALS_FILE, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['symbol', 'entry', 'target1', 'target2', 'stop', 'score', 'reasons', 'sent_time'])
+        writer.writerow([
+            signal['symbol'],
+            signal['entry'],
+            signal['target1'],
+            signal['target2'],
+            signal['stop'],
+            signal['score'],
+            '; '.join(signal['reasons']),
+            signal['time'].strftime('%Y-%m-%d %H:%M:%S')
+        ])
 
-💰 {s['symbol']}
+# ------------------- إضافة صفقة للمتابعة -------------------
+def add_to_tracking(signal):
+    file_exists = os.path.isfile(TRADES_FILE)
+    with open(TRADES_FILE, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['symbol', 'entry', 'target1', 'target2', 'stop', 'status', 'entry_time', 'signal_time'])
+        writer.writerow([
+            signal['symbol'],
+            signal['entry'],
+            signal['target1'],
+            signal['target2'],
+            signal['stop'],
+            'pending',  # بانتظار دخول المستخدم
+            '',  # وقت الدخول الفعلي
+            signal['time'].strftime('%Y-%m-%d %H:%M:%S')
+        ])
+
+# ------------------- إرسال الإشارة -------------------
+async def send_signal(s):
+    msg = f"""
+🧠 **إشارة ذكية - قم بالدخول يدوياً** 🧠
+
+💰 {s['display_symbol']}
 📥 دخول: {s['entry']}
 🎯 هدف 1 (3%): {s['target1']}
 🎯 هدف 2 (6%): {s['target2']}
@@ -207,22 +244,133 @@ async def send_smart_signal(s):
 
 ⚡ نقاط القوة: {s['score']}/8
 📊 الأسباب: {', '.join(s['reasons'])}
-⏰ {s['time']}
+⏰ {s['time'].strftime('%Y-%m-%d %H:%M')}
+
+⚠️ بعد الدخول، سيتم تتبع الصفقة تلقائياً
 """
     await bot.send_message(chat_id=CHAT_ID, text=msg)
-    print(f"✅ Smart signal: {s['symbol']}")
+    print(f"✅ Signal sent: {s['symbol']}")
+
+# ------------------- تحديث حالة الصفقة (بعد الدخول) -------------------
+def mark_as_active(symbol, entry_price):
+    """لما تدخل الصفقة يدوياً، تشغل هذه الدالة (يدوياً أو عن طريق أمر)"""
+    if not os.path.isfile(TRADES_FILE):
+        return
+    
+    with open(TRADES_FILE, 'r') as f:
+        rows = list(csv.DictReader(f))
+    
+    for row in rows:
+        if row['symbol'] == symbol and row['status'] == 'pending':
+            row['status'] = 'active'
+            row['entry'] = entry_price
+            row['entry_time'] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    
+    with open(TRADES_FILE, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['symbol', 'entry', 'target1', 'target2', 'stop', 'status', 'entry_time', 'signal_time'])
+        writer.writeheader()
+        writer.writerows(rows)
+
+# ------------------- مراقبة الصفقات النشطة -------------------
+async def monitor_trades():
+    if not os.path.isfile(TRADES_FILE):
+        return
+    
+    with open(TRADES_FILE, 'r') as f:
+        trades = list(csv.DictReader(f))
+    
+    updated = False
+    
+    for trade in trades:
+        if trade['status'] == 'active':
+            symbol = trade['symbol']
+            entry = float(trade['entry'])
+            target1 = float(trade['target1'])
+            target2 = float(trade['target2'])
+            stop = float(trade['stop'])
+            
+            # جلب السعر الحالي
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                current = float(r.json()['price'])
+                
+                # تحقيق الهدف الأول
+                if current >= target1 and trade.get('target1_hit') != 'yes':
+                    profit = ((current - entry) / entry) * 100
+                    msg = f"""
+✅ **هدف أول محقق** ✅
+
+💰 {symbol.replace('USDT', '/USDT')}
+📥 دخول: {entry}
+🎯 هدف 1: {target1}
+📈 الربح: {profit:.2f}%
+⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}
+"""
+                    await bot.send_message(chat_id=CHAT_ID, text=msg)
+                    trade['target1_hit'] = 'yes'
+                    updated = True
+                
+                # تحقيق الهدف الثاني
+                if current >= target2 and trade.get('target2_hit') != 'yes':
+                    profit = ((current - entry) / entry) * 100
+                    msg = f"""
+🏆 **هدف ثاني محقق** 🏆
+
+💰 {symbol.replace('USDT', '/USDT')}
+📥 دخول: {entry}
+🎯 هدف 2: {target2}
+📈 الربح: {profit:.2f}%
+⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}
+"""
+                    await bot.send_message(chat_id=CHAT_ID, text=msg)
+                    trade['target2_hit'] = 'yes'
+                    updated = True
+                    trade['status'] = 'closed'  # نغلق الصفقة تلقائياً بعد الهدف الثاني
+                
+                # كسر وقف الخسارة
+                if current <= stop and trade.get('stop_hit') != 'yes':
+                    loss = ((entry - current) / entry) * 100
+                    msg = f"""
+❌ **وقف خسارة** ❌
+
+💰 {symbol.replace('USDT', '/USDT')}
+📥 دخول: {entry}
+🛑 وقف: {stop}
+📉 الخسارة: {loss:.2f}%
+⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}
+"""
+                    await bot.send_message(chat_id=CHAT_ID, text=msg)
+                    trade['stop_hit'] = 'yes'
+                    updated = True
+                    trade['status'] = 'closed'
+    
+    if updated:
+        with open(TRADES_FILE, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['symbol', 'entry', 'target1', 'target2', 'stop', 'status', 'entry_time', 'signal_time', 'target1_hit', 'target2_hit', 'stop_hit'])
+            writer.writeheader()
+            writer.writerows(trades)
 
 # ------------------- الرئيسية -------------------
 async def main():
-    print(f"🧠 Smart Strategy running at {datetime.utcnow()}")
+    print(f"🧠 Smart Tracker running at {datetime.utcnow()}")
+    
+    # 1. البحث عن إشارات جديدة
     coins = get_altcoins()
     print(f"✅ {len(coins)} coins loaded")
     
     for coin in coins:
         signal = smart_analysis(coin)
         if signal:
-            await send_smart_signal(signal)
+            await send_signal(signal)
+            save_signal(signal)
+            add_to_tracking(signal)
             await asyncio.sleep(3)
+    
+    # 2. مراقبة الصفقات النشطة
+    await monitor_trades()
+    
+    print("✅ Scan complete")
 
 if __name__ == "__main__":
     asyncio.run(main())
