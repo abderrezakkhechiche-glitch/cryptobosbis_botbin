@@ -142,40 +142,33 @@ def smart_analysis(symbol):
     score = 0
     reasons = []
     
-    # الطبقة 1: اتجاه قوي
     adx = calculate_adx(highs, lows, closes)
     if adx > 25:
         score += 1
         reasons.append(f"ADX {round(adx,1)}")
     
-    # الطبقة 2: زخم مناسب
     rsi_val = calculate_rsi(closes)
     if 40 < rsi_val < 60:
         score += 1
         reasons.append(f"RSI {round(rsi_val,1)}")
     
-    # الطبقة 3: خروج من ذروة بيع
     stoch = calculate_stochastic(highs, lows, closes)
     if stoch < 20:
         score += 1
         reasons.append(f"Stoch {round(stoch,1)}")
     
-    # الطبقة 4: تقاطع MACD
     if calculate_macd_crossover(closes):
         score += 2
         reasons.append("MACD Crossover")
     
-    # الطبقة 5: اتجاه عام صاعد
     if above_ema(closes, 50):
         score += 1
         reasons.append("Above EMA50")
     
-    # الطبقة 6: حجم تداول قوي
     if volume_confirm(volumes):
         score += 1
         reasons.append("Volume Surge")
     
-    # إذا وصلت النقاط لـ 5 أو أكثر → إشارة قوية
     if score >= 5:
         price = closes[-1]
         target1 = round(price * 1.03, 6)
@@ -226,8 +219,8 @@ def add_to_tracking(signal):
             signal['target1'],
             signal['target2'],
             signal['stop'],
-            'pending',  # بانتظار دخول المستخدم
-            '',  # وقت الدخول الفعلي
+            'pending',
+            '',
             signal['time'].strftime('%Y-%m-%d %H:%M:%S')
         ])
 
@@ -251,26 +244,6 @@ async def send_signal(s):
     await bot.send_message(chat_id=CHAT_ID, text=msg)
     print(f"✅ Signal sent: {s['symbol']}")
 
-# ------------------- تحديث حالة الصفقة (بعد الدخول) -------------------
-def mark_as_active(symbol, entry_price):
-    """لما تدخل الصفقة يدوياً، تشغل هذه الدالة (يدوياً أو عن طريق أمر)"""
-    if not os.path.isfile(TRADES_FILE):
-        return
-    
-    with open(TRADES_FILE, 'r') as f:
-        rows = list(csv.DictReader(f))
-    
-    for row in rows:
-        if row['symbol'] == symbol and row['status'] == 'pending':
-            row['status'] = 'active'
-            row['entry'] = entry_price
-            row['entry_time'] = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-    
-    with open(TRADES_FILE, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=['symbol', 'entry', 'target1', 'target2', 'stop', 'status', 'entry_time', 'signal_time'])
-        writer.writeheader()
-        writer.writerows(rows)
-
 # ------------------- مراقبة الصفقات النشطة -------------------
 async def monitor_trades():
     if not os.path.isfile(TRADES_FILE):
@@ -289,13 +262,11 @@ async def monitor_trades():
             target2 = float(trade['target2'])
             stop = float(trade['stop'])
             
-            # جلب السعر الحالي
             url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
             r = requests.get(url, timeout=5)
             if r.status_code == 200:
                 current = float(r.json()['price'])
                 
-                # تحقيق الهدف الأول
                 if current >= target1 and trade.get('target1_hit') != 'yes':
                     profit = ((current - entry) / entry) * 100
                     msg = f"""
@@ -311,7 +282,6 @@ async def monitor_trades():
                     trade['target1_hit'] = 'yes'
                     updated = True
                 
-                # تحقيق الهدف الثاني
                 if current >= target2 and trade.get('target2_hit') != 'yes':
                     profit = ((current - entry) / entry) * 100
                     msg = f"""
@@ -326,9 +296,8 @@ async def monitor_trades():
                     await bot.send_message(chat_id=CHAT_ID, text=msg)
                     trade['target2_hit'] = 'yes'
                     updated = True
-                    trade['status'] = 'closed'  # نغلق الصفقة تلقائياً بعد الهدف الثاني
+                    trade['status'] = 'closed'
                 
-                # كسر وقف الخسارة
                 if current <= stop and trade.get('stop_hit') != 'yes':
                     loss = ((entry - current) / entry) * 100
                     msg = f"""
@@ -352,25 +321,37 @@ async def monitor_trades():
             writer.writerows(trades)
 
 # ------------------- الرئيسية -------------------
-# ===== اختبار يدوي مؤقت =====
-test_signal = {
-    'symbol': 'BTCUSDT',
-    'display_symbol': 'BTC/USDT',
-    'entry': 65000,
-    'target1': 66950,
-    'target2': 68900,
-    'stop': 63050,
-    'score': 8,
-    'reasons': ['اختبار', 'يدوي'],
-    'time': datetime.utcnow()
-}
-await send_signal(test_signal)
-print("✅ تم إرسال إشارة اختبارية")
-# ============================
+async def main():
+    print(f"🧠 Smart Tracker running at {datetime.utcnow()}")
     
-    # 2. مراقبة الصفقات النشطة
+    # ===== اختبار يدوي مؤقت =====
+    test_signal = {
+        'symbol': 'BTCUSDT',
+        'display_symbol': 'BTC/USDT',
+        'entry': 65000,
+        'target1': 66950,
+        'target2': 68900,
+        'stop': 63050,
+        'score': 8,
+        'reasons': ['اختبار', 'يدوي'],
+        'time': datetime.utcnow()
+    }
+    await send_signal(test_signal)
+    print("✅ تم إرسال إشارة اختبارية")
+    # ============================
+    
+    coins = get_altcoins()
+    print(f"✅ {len(coins)} coins loaded")
+    
+    for coin in coins:
+        signal = smart_analysis(coin)
+        if signal:
+            await send_signal(signal)
+            save_signal(signal)
+            add_to_tracking(signal)
+            await asyncio.sleep(3)
+    
     await monitor_trades()
-    
     print("✅ Scan complete")
 
 if __name__ == "__main__":
